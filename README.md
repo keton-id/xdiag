@@ -70,7 +70,7 @@ Table posts {
 Ref: posts.author_id > users.id [delete: cascade]
 ```
 
-Inline refs (`user_id bigint [ref: > users.id]`), standalone `Ref` lines, `TableGroup` blocks, schema-qualified names (`auth.users`), enums, composite primary keys from `indexes {}`, and field/table notes are all supported.
+Inline refs (`user_id bigint [ref: > users.id]`), standalone `Ref` lines, `TableGroup` blocks, schema-qualified names (`auth.users`), enums, composite primary keys from `indexes {}`, and field/table notes are parsed. Notes are not drawn on the canvas; they are preserved in the JSON export.
 
 Generated PostgreSQL for the FK above:
 
