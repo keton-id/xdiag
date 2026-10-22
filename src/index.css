@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --xd-bg: #020617;
+  --xd-surface: #0f172a;
+  --xd-surface-alt: #1e2130;
+  --xd-border: #334155;
+  --xd-accent: #6366f1;
+  --xd-accent-soft: #a5b4fc;
+  --xd-edge: #6366f1;
+  --xd-edge-active: #c7d2fe;
+  --xd-grid: #334155;
+  --xd-flow-duration: 1.6s;
+  --xd-flow-width: 3.5px;
+}
+
+body {
+  margin: 0;
+  background: var(--xd-bg);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Flow animation on a hovered relation. Negative offset moves the dash
+   pattern from `source` towards `target`, i.e. `relation.from` -> `to`.
+   Dash period (13px) divides the -39px shift so the loop is seamless. */
+@keyframes xdiag-flow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -39;
+  }
+}
+
+.xdiag-flow {
+  stroke-width: var(--xd-flow-width);
+  stroke-dasharray: 6 7; /* period 13 divides the -39px offset: seamless loop */
+  animation: xdiag-flow var(--xd-flow-duration) linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xdiag-flow {
+    animation: none;
+  }
+}
+
+/* Sidebar collapse animation (disabled by the `animateCollapse` setting). */
+.xdiag-animate-width {
+  transition: width 220ms ease, opacity 160ms ease;
+}

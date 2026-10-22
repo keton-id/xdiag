@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      codemirror:
+        patterns: ["@codemirror/*", "codemirror", "@lezer/*"]
+      xyflow:
+        patterns: ["@xyflow/*"]
+      tooling:
+        patterns: ["vite", "vitest", "@vitejs/*", "@vitest/*", "typescript", "oxlint", "tailwindcss", "@tailwindcss/*", "jsdom"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

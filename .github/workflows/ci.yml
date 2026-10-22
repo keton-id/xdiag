@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PNPM_VERSION: 12.15.0
+  TRIVY_VERSION: 0.76.1
+
+jobs:
+  build:
+    name: Lint, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm test
+      - run: pnpm build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist
+          retention-days: 1
+
+  scan-source:
+    name: Trivy (filesystem)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Trivy
+        run: |
+          curl -sSfL -o trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          tar -xzf trivy.tar.gz trivy
+          install -m 755 trivy "$HOME/.local/bin/trivy"
+
+      - name: Scan dependencies, secrets and misconfigurations
+        run: |
+          trivy fs --quiet --scanners vuln,secret,misconfig \
+            --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed .
+
+      - name: SBOM
+        run: trivy fs --quiet --format cyclonedx --output trivy-fs.cdx.json .
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: sbom-source
+          path: trivy-fs.cdx.json
+          retention-days: 7
+
+  scan-image:
+    name: Trivy (image)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build -t xdiag:ci .
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: xdiag:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 1
+          format: table
+
+      - name: SBOM
+        run: |
+          curl -sSfL -o trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          tar -xzf trivy.tar.gz trivy
+          ./trivy image --quiet --format cyclonedx --output trivy-image.cdx.json xdiag:ci
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: sbom-image
+          path: trivy-image.cdx.json
+          retention-days: 7
