@@ -76,7 +76,7 @@ Generated PostgreSQL for the FK above:
 
 ```sql
 ALTER TABLE "posts"
-  ADD CONSTRAINT "fk_users_id"
+  ADD CONSTRAINT "fk_posts_author_id"
   FOREIGN KEY ("author_id")
   REFERENCES "users" ("id")
   ON DELETE CASCADE;
