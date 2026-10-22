@@ -51,7 +51,7 @@ jobs:
           curl -sSfL -o trivy.tar.gz \
             "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
           tar -xzf trivy.tar.gz trivy
-          install -m 755 trivy "$HOME/.local/bin/trivy"
+          sudo install -m 755 trivy /usr/local/bin/trivy
 
       - name: Scan dependencies, secrets and misconfigurations
         run: |
@@ -74,24 +74,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Build image
-        run: docker build -t xdiag:ci .
-
-      - name: Scan image
-        uses: aquasecurity/trivy-action@0.36.0
-        with:
-          image-ref: xdiag:ci
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          format: table
-
-      - name: SBOM
+      - name: Install Trivy
         run: |
           curl -sSfL -o trivy.tar.gz \
             "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
           tar -xzf trivy.tar.gz trivy
-          ./trivy image --quiet --format cyclonedx --output trivy-image.cdx.json xdiag:ci
+          sudo install -m 755 trivy /usr/local/bin/trivy
+
+      - name: Build image
+        run: docker build -t xdiag:ci .
+
+      - name: Scan image
+        run: |
+          trivy image --quiet --exit-code 1 --severity HIGH,CRITICAL \
+            --ignore-unfixed xdiag:ci
+
+      - name: SBOM
+        run: trivy image --quiet --format cyclonedx --output trivy-image.cdx.json xdiag:ci
 
       - uses: actions/upload-artifact@v7
         if: always()
