@@ -1,42 +1,71 @@
 /**
  * ExportModal.tsx
- * Modal for exporting the diagram as DBML, PostgreSQL, MySQL, or JSON.
+ * Kind-aware export: ERD offers DBML/SQL/JSON, every kind offers its source
+ * and, when a vector canvas is mounted, an SVG snapshot.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { X, Copy, Check, Download } from 'lucide-react';
+
 import type { Schema } from '../../types/schema';
+import type { DiagramKind } from '../../kinds/types';
+import { KINDS } from '../../kinds/registry';
 import { exportSQL } from '../../engine/sqlExporter';
+import { canvasSvgMarkup, downloadText } from '../svg/exportSvg';
 
-type ExportFormat = 'dbml' | 'postgresql' | 'mysql' | 'json';
-
-interface ExportModalProps {
-  schema: Schema;
-  dbmlSource: string;
-  onClose: () => void;
-}
+type ExportFormat = 'source' | 'dbml' | 'postgresql' | 'mysql' | 'json' | 'svg';
 
 const FORMAT_LABELS: Record<ExportFormat, string> = {
+  source: 'Source',
   dbml: 'DBML',
   postgresql: 'PostgreSQL',
   mysql: 'MySQL',
   json: 'JSON',
+  svg: 'SVG',
 };
 
-function buildOutput(format: ExportFormat, schema: Schema, dbmlSource: string): string {
-  switch (format) {
-    case 'dbml': return dbmlSource;
-    case 'postgresql': return exportSQL(schema, 'postgresql').ddl;
-    case 'mysql': return exportSQL(schema, 'mysql').ddl;
-    case 'json': return JSON.stringify(schema, null, 2);
-  }
+const EXTENSIONS: Record<ExportFormat, string> = {
+  source: 'txt',
+  dbml: 'dbml',
+  postgresql: 'sql',
+  mysql: 'sql',
+  json: 'json',
+  svg: 'svg',
+};
+
+interface ExportModalProps {
+  kind: DiagramKind;
+  source: string;
+  schema: Schema | null;
+  onClose: () => void;
 }
 
-export default function ExportModal({ schema, dbmlSource, onClose }: ExportModalProps) {
-  const [format, setFormat] = useState<ExportFormat>('dbml');
+function formatsFor(kind: DiagramKind): ExportFormat[] {
+  // ERD nodes are React Flow DOM, not SVG, so a vector snapshot only exists
+  // for the hand-rolled canvases.
+  return kind === 'erd' ? ['dbml', 'postgresql', 'mysql', 'json'] : ['source', 'svg'];
+}
+
+export default function ExportModal({ kind, source, schema, onClose }: ExportModalProps) {
+  const formats = formatsFor(kind);
+  const [format, setFormat] = useState<ExportFormat>(formats[0]);
   const [copied, setCopied] = useState(false);
 
-  const output = buildOutput(format, schema, dbmlSource);
+  const output = useMemo(() => {
+    switch (format) {
+      case 'source':
+      case 'dbml':
+        return source;
+      case 'postgresql':
+        return schema ? exportSQL(schema, 'postgresql').ddl : '';
+      case 'mysql':
+        return schema ? exportSQL(schema, 'mysql').ddl : '';
+      case 'json':
+        return schema ? JSON.stringify(schema, null, 2) : '';
+      case 'svg':
+        return canvasSvgMarkup() ?? 'The current canvas does not expose a vector snapshot.';
+    }
+  }, [format, source, schema]);
 
   function handleCopy() {
     navigator.clipboard.writeText(output).then(() => {
@@ -46,14 +75,9 @@ export default function ExportModal({ schema, dbmlSource, onClose }: ExportModal
   }
 
   function handleDownload() {
-    const ext: Record<ExportFormat, string> = { dbml: 'dbml', postgresql: 'sql', mysql: 'sql', json: 'json' };
-    const blob = new Blob([output], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `schema.${ext[format]}`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const base = kind === 'erd' ? 'schema' : kind;
+    const ext = EXTENSIONS[format];
+    downloadText(output, `${base}.${ext}`, format === 'svg' ? 'image/svg+xml' : 'text/plain');
   }
 
   return (
@@ -61,25 +85,25 @@ export default function ExportModal({ schema, dbmlSource, onClose }: ExportModal
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-[720px] max-w-[95vw] max-h-[85vh] flex flex-col rounded-xl bg-slate-900 border border-slate-700 shadow-2xl">
+      <div className="flex max-h-[85vh] w-[720px] max-w-[95vw] flex-col rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-          <h2 className="font-semibold text-white">Export Schema</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
+        <div className="flex items-center justify-between border-b border-slate-700 px-5 py-4">
+          <h2 className="font-semibold text-white">Export {KINDS[kind].label}</h2>
+          <button onClick={onClose} className="text-gray-400 transition-colors hover:text-white" aria-label="Close">
             <X size={18} />
           </button>
         </div>
 
         {/* Format tabs */}
         <div className="flex gap-1 px-5 pt-3">
-          {(Object.keys(FORMAT_LABELS) as ExportFormat[]).map(f => (
+          {formats.map(f => (
             <button
               key={f}
               onClick={() => setFormat(f)}
-              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+              className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${
                 format === f
                   ? 'bg-indigo-600 text-white'
-                  : 'text-gray-400 hover:text-white hover:bg-slate-700'
+                  : 'text-gray-400 hover:bg-slate-700 hover:text-white'
               }`}
             >
               {FORMAT_LABELS[f]}
@@ -88,22 +112,22 @@ export default function ExportModal({ schema, dbmlSource, onClose }: ExportModal
         </div>
 
         {/* Content */}
-        <pre className="flex-1 overflow-auto mx-5 mt-3 p-3 rounded-lg bg-slate-950 border border-slate-700 text-[12px] font-mono text-gray-300 leading-relaxed whitespace-pre">
+        <pre className="mx-5 mt-3 flex-1 overflow-auto whitespace-pre rounded-lg border border-slate-700 bg-slate-950 p-3 font-mono text-[12px] leading-relaxed text-gray-300">
           {output}
         </pre>
 
         {/* Actions */}
-        <div className="flex gap-2 px-5 py-4 border-t border-slate-700">
+        <div className="flex gap-2 border-t border-slate-700 px-5 py-4">
           <button
             onClick={handleCopy}
-            className="flex items-center gap-2 px-3 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm text-white transition-colors"
+            className="flex items-center gap-2 rounded bg-slate-700 px-3 py-2 text-sm text-white transition-colors hover:bg-slate-600"
           >
             {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
             {copied ? 'Copied!' : 'Copy'}
           </button>
           <button
             onClick={handleDownload}
-            className="flex items-center gap-2 px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500 text-sm text-white transition-colors"
+            className="flex items-center gap-2 rounded bg-indigo-600 px-3 py-2 text-sm text-white transition-colors hover:bg-indigo-500"
           >
             <Download size={14} />
             Download

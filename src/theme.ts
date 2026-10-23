@@ -16,6 +16,9 @@ export interface Palette {
   edge: string;
   edgeActive: string;
   grid: string;
+  /** Body text and dimmed labels — the SVG canvases paint with these. */
+  fg: string;
+  muted: string;
 }
 
 export const PALETTES: Palette[] = [
@@ -31,6 +34,8 @@ export const PALETTES: Palette[] = [
     edge: '#6366f1',
     edgeActive: '#c7d2fe',
     grid: '#334155',
+    fg: '#e2e8f0',
+    muted: '#94a3b8',
   },
   {
     id: 'ocean',
@@ -44,6 +49,8 @@ export const PALETTES: Palette[] = [
     edge: '#0ea5e9',
     edgeActive: '#bae6fd',
     grid: '#1e4457',
+    fg: '#e0f2fe',
+    muted: '#8fb3c7',
   },
   {
     id: 'forest',
@@ -57,6 +64,8 @@ export const PALETTES: Palette[] = [
     edge: '#10b981',
     edgeActive: '#a7f3d0',
     grid: '#245440',
+    fg: '#dcfce7',
+    muted: '#7fae95',
   },
   {
     id: 'rose',
@@ -70,6 +79,8 @@ export const PALETTES: Palette[] = [
     edge: '#f43f5e',
     edgeActive: '#fecdd3',
     grid: '#5a2437',
+    fg: '#ffe4e6',
+    muted: '#b08a97',
   },
   {
     id: 'amber',
@@ -83,6 +94,8 @@ export const PALETTES: Palette[] = [
     edge: '#f59e0b',
     edgeActive: '#fde68a',
     grid: '#5c421a',
+    fg: '#fef3c7',
+    muted: '#bda887',
   },
 ];
 
@@ -161,6 +174,8 @@ export function applySettings(settings: Settings) {
   root.setProperty('--xd-edge', edge);
   root.setProperty('--xd-edge-active', edgeActive);
   root.setProperty('--xd-grid', palette.grid);
+  root.setProperty('--xd-fg', palette.fg);
+  root.setProperty('--xd-muted', palette.muted);
   root.setProperty('--xd-flow-duration', `${settings.flowSpeed}s`);
   root.setProperty('--xd-flow-width', `${settings.flowWidth}px`);
 }

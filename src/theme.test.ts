@@ -71,6 +71,8 @@ describe('applySettings', () => {
     expect(varOf('--xd-accent-soft')).toBe(indigo.accentSoft);
     expect(varOf('--xd-edge-active')).toBe(indigo.edgeActive);
     expect(varOf('--xd-grid')).toBe(indigo.grid);
+    expect(varOf('--xd-fg')).toBe(indigo.fg);
+    expect(varOf('--xd-muted')).toBe(indigo.muted);
   });
 
   it('formats animation tokens as CSS lengths', () => {

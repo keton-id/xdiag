@@ -1,65 +1,71 @@
 /**
  * App.tsx
- * Root application: wires editor, canvas, toolbar, and export modal.
+ * Root application: project state (documents + active file), the split editor,
+ * kind dispatch to the right canvas, and the export/settings modals.
  */
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { lazy, Suspense, useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 
-import { parseDBML } from './engine/dbmlParser';
-import { SAMPLE_DBML } from './engine/sampleSchema';
-import type { Schema } from './types/schema';
+import { KINDS } from './kinds/registry';
+import type { DiagramKind, KindDocument } from './kinds/types';
 import type { LayoutDirection } from './engine/layout';
+import {
+  createDocument,
+  loadProject,
+  parseProject,
+  saveProject,
+  serializeProject,
+  type Project,
+} from './project/store';
 
+import FileList from './components/files/FileList';
 import Toolbar from './components/toolbar/Toolbar';
 import EditorPanel from './components/editor/EditorPanel';
 import ERDCanvas from './components/canvas/ERDCanvas';
 import ExportModal from './components/export/ExportModal';
 import SettingsModal from './components/settings/SettingsModal';
+import { downloadText } from './components/svg/exportSvg';
 import { applySettings, loadSettings, saveSettings, type Settings } from './theme';
 
+// Non-ERD renderers live in their own chunks: opening xdiag must not download
+// three renderers the active file never uses.
+const SequenceCanvas = lazy(() => import('./components/svg/sequence/SequenceCanvas'));
+const FlowchartCanvas = lazy(() => import('./components/svg/flowchart/FlowchartCanvas'));
+const MindmapCanvas = lazy(() => import('./components/svg/mindmap/MindmapCanvas'));
+
 import './index.css';
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const EMPTY_SCHEMA: Schema = { tables: [], relations: [], enums: [], tableGroups: [] };
-
-interface ParsedState {
-  schema: Schema;
-  error: { message: string; line?: number } | null;
-}
-
-function parseSafe(dbml: string, prevSchema?: Schema): ParsedState {
-  const result = parseDBML(dbml);
-  if (result.ok) return { schema: result.schema, error: null };
-  if (result.partial && result.partial.tables.length > 0) {
-    return {
-      schema: result.partial,
-      error: { message: result.error, line: result.line },
-    };
-  }
-  return {
-    schema: prevSchema ?? EMPTY_SCHEMA,
-    error: { message: result.error, line: result.line },
-  };
-}
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [dbmlText, setDbmlText] = useState(SAMPLE_DBML);
-  const [parsed, setParsed] = useState<ParsedState>(() => parseSafe(SAMPLE_DBML));
+  const [project, setProject] = useState<Project>(loadProject);
   const [direction, setDirection] = useState<LayoutDirection>('LR');
   const [layoutKey, setLayoutKey] = useState(0);
   const [showExport, setShowExport] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [projectError, setProjectError] = useState<string | null>(null);
 
-  // Theme tokens live on <html> so portal-rendered modals inherit them too.
+  const active = project.documents.find(d => d.id === project.activeId) ?? project.documents[0];
+  const spec = KINDS[active.kind];
+  // Keep the last document that parsed so a mid-edit typo shows the error bar
+  // over the previous good drawing instead of blanking the canvas.
+  const lastGood = useRef<KindDocument | null>(null);
+  const parsed = useMemo(() => {
+    const next = spec.parse(active.source, lastGood.current ?? undefined);
+    if (!next.error) lastGood.current = next;
+    return next;
+  }, [spec, active.source]);
+
   useEffect(() => {
     applySettings(settings);
     saveSettings(settings);
   }, [settings]);
+
+  useEffect(() => {
+    saveProject(project);
+  }, [project]);
 
   // Resizable & collapsible editor panel state
   const [editorWidth, setEditorWidth] = useState<number>(() => {
@@ -105,18 +111,46 @@ export default function App() {
     };
   }, [isDragging]);
 
-  // Ref-based fitView handle: ERDCanvas registers its fitView fn here
   const fitViewRef = useRef<(() => void) | null>(null);
   const registerFitView = useCallback((fn: () => void) => { fitViewRef.current = fn; }, []);
 
-  function handleDbmlChange(text: string) {
-    setDbmlText(text);
-    setParsed(prev => parseSafe(text, prev.schema));
+  function updateActiveSource(source: string) {
+    setProject(prev => ({
+      ...prev,
+      documents: prev.documents.map(d => (d.id === prev.activeId ? { ...d, source } : d)),
+    }));
+  }
+
+  function handleSelect(id: string) {
+    setProject(prev => ({ ...prev, activeId: id }));
+    setLayoutKey(k => k + 1);
+  }
+
+  function handleAdd(kind: DiagramKind) {
+    setProject(prev => {
+      const doc = createDocument(kind, prev.documents);
+      return { documents: [...prev.documents, doc], activeId: doc.id };
+    });
+    setLayoutKey(k => k + 1);
+  }
+
+  function handleRename(id: string, name: string) {
+    setProject(prev => ({
+      ...prev,
+      documents: prev.documents.map(d => (d.id === id ? { ...d, name } : d)),
+    }));
+  }
+
+  function handleDelete(id: string) {
+    setProject(prev => {
+      if (prev.documents.length === 1) return prev;
+      const documents = prev.documents.filter(d => d.id !== id);
+      return { documents, activeId: prev.activeId === id ? documents[0].id : prev.activeId };
+    });
   }
 
   function handleLoadSample() {
-    setDbmlText(SAMPLE_DBML);
-    setParsed(parseSafe(SAMPLE_DBML));
+    updateActiveSource(spec.sample);
     setLayoutKey(k => k + 1);
   }
 
@@ -129,39 +163,79 @@ export default function App() {
     setLayoutKey(k => k + 1);
   }
 
+  function handleExportProject() {
+    downloadText(serializeProject(project), 'xdiag-project.json', 'application/json');
+  }
+
+  async function handleImportProject(file: File) {
+    try {
+      const next = parseProject(JSON.parse(await file.text()));
+      setProject(next);
+      setProjectError(null);
+      setLayoutKey(k => k + 1);
+    } catch (err) {
+      setProjectError(err instanceof Error ? err.message : 'Invalid project file');
+    }
+  }
+
+  const schema = parsed.kind === 'erd' ? parsed.schema : null;
+
   return (
-    <div className="flex flex-col h-screen text-white overflow-hidden" style={{ background: 'var(--xd-bg)' }}>
+    <div className="flex h-screen flex-col overflow-hidden text-white" style={{ background: 'var(--xd-bg)' }}>
       <Toolbar
-        title="xdiag — ERD Creator"
+        title={active.name}
+        kind={active.kind}
         direction={direction}
         onAutoArrange={handleAutoArrange}
         onDirectionChange={handleDirectionChange}
         onZoomToFit={() => fitViewRef.current?.()}
         onLoadSample={handleLoadSample}
         onExport={() => setShowExport(true)}
+        onExportProject={handleExportProject}
+        onImportProject={handleImportProject}
         onOpenSettings={() => setShowSettings(true)}
       />
 
+      {projectError && (
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-red-800/50 bg-red-950/40 px-4 py-1.5 text-xs text-red-300">
+          <span>Import failed: {projectError}</span>
+          <button onClick={() => setProjectError(null)} className="text-red-300 hover:text-white">
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Main split: editor left, canvas right */}
-      <div className={`flex flex-1 overflow-hidden relative ${isDragging ? 'select-none cursor-col-resize' : ''}`}>
+      <div className={`relative flex flex-1 overflow-hidden ${isDragging ? 'cursor-col-resize select-none' : ''}`}>
         {/*
-          Always mounted so CodeMirror keeps its state (and folds) across
-          collapse/expand; the container width animates to zero instead.
+          Always mounted so CodeMirror keeps its state across collapse/expand;
+          the container width animates to zero instead.
         */}
         <div
           data-testid="editor-container"
           style={{
             width: isCollapsed ? 0 : editorWidth,
             opacity: isCollapsed ? 0 : 1,
+            borderRight: '1px solid var(--xd-border)',
+            background: 'var(--xd-surface)',
           }}
-          className={`hidden md:flex shrink-0 flex-col overflow-hidden h-full ${
+          className={`hidden h-full shrink-0 flex-col overflow-hidden md:flex ${
             settings.animateCollapse ? 'xdiag-animate-width' : ''
           }`}
           aria-hidden={isCollapsed}
         >
+          <FileList
+            documents={project.documents}
+            activeId={active.id}
+            onSelect={handleSelect}
+            onAdd={handleAdd}
+            onRename={handleRename}
+            onDelete={handleDelete}
+          />
           <EditorPanel
-            value={dbmlText}
-            onChange={handleDbmlChange}
+            value={active.source}
+            kind={active.kind}
+            onChange={updateActiveSource}
             error={parsed.error}
             onLoadSample={handleLoadSample}
           />
@@ -175,19 +249,17 @@ export default function App() {
             try { localStorage.setItem('xdiag_editor_width', '380'); } catch {}
           }}
           style={{ width: isCollapsed ? 0 : 12, borderColor: 'var(--xd-border)' }}
-          className={`hidden md:flex relative items-center justify-center shrink-0 border-x transition-colors cursor-col-resize select-none group z-10 ${
+          className={`group relative z-10 hidden shrink-0 cursor-col-resize select-none items-center justify-center border-x transition-colors md:flex ${
             isDragging ? 'bg-indigo-600/30' : 'hover:bg-indigo-600/20'
           }`}
           title="Drag to resize editor (Double-click to reset to 380px)"
         >
-          {/* Grab indicator */}
           <div
-            className={`w-0.5 h-8 rounded-full transition-colors ${
+            className={`h-8 w-0.5 rounded-full transition-colors ${
               isDragging ? 'bg-indigo-400' : 'bg-slate-600 group-hover:bg-indigo-400'
             }`}
           />
 
-          {/* Collapse button on splitter */}
           {!isCollapsed && (
             <button
               type="button"
@@ -210,7 +282,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => setIsCollapsed(false)}
-            className="absolute left-3 top-3 z-20 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-900/90 text-slate-300 shadow-xl backdrop-blur hover:bg-slate-800 hover:text-white transition-all text-xs font-medium"
+            className="absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/90 px-2.5 py-1.5 text-xs font-medium text-slate-300 shadow-xl backdrop-blur transition-all hover:bg-slate-800 hover:text-white"
             title="Expand editor"
           >
             <svg className="h-3.5 w-3.5 rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -221,23 +293,16 @@ export default function App() {
         )}
 
         {/* Canvas */}
-        <div className="flex-1 overflow-hidden relative">
-          <ReactFlowProvider>
-            <ERDCanvas
-              schema={parsed.schema}
-              direction={direction}
-              layoutKey={layoutKey}
-              settings={settings}
-              onFitView={registerFitView}
-            />
-          </ReactFlowProvider>
+        <div className="relative flex-1 overflow-hidden">
+          <Canvas kindDocument={parsed} direction={direction} layoutKey={layoutKey} settings={settings} onFitView={registerFitView} />
         </div>
       </div>
 
       {showExport && (
         <ExportModal
-          schema={parsed.schema}
-          dbmlSource={dbmlText}
+          kind={active.kind}
+          source={active.source}
+          schema={schema}
           onClose={() => setShowExport(false)}
         />
       )}
@@ -250,5 +315,45 @@ export default function App() {
         />
       )}
     </div>
+  );
+}
+
+function Canvas({
+  kindDocument,
+  direction,
+  layoutKey,
+  settings,
+  onFitView,
+}: {
+  kindDocument: KindDocument;
+  direction: LayoutDirection;
+  layoutKey: number;
+  settings: Settings;
+  onFitView: (fn: () => void) => void;
+}) {
+  if (kindDocument.kind === 'erd') {
+    return (
+      <ReactFlowProvider>
+        <ERDCanvas
+          schema={kindDocument.schema}
+          direction={direction}
+          layoutKey={layoutKey}
+          settings={settings}
+          onFitView={onFitView}
+        />
+      </ReactFlowProvider>
+    );
+  }
+
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center text-xs text-slate-500">Loading renderer…</div>
+      }
+    >
+      {kindDocument.kind === 'sequence' && <SequenceCanvas model={kindDocument.model} onFitView={onFitView} />}
+      {kindDocument.kind === 'flowchart' && <FlowchartCanvas model={kindDocument.model} onFitView={onFitView} />}
+      {kindDocument.kind === 'mindmap' && <MindmapCanvas model={kindDocument.model} onFitView={onFitView} />}
+    </Suspense>
   );
 }

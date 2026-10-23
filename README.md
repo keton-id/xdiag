@@ -1,6 +1,6 @@
 # xdiag
 
-**A fast, local-first ERD creator for DBML.** Type or paste a [DBML](https://dbml.dbdiagram.io) schema, get a live entity-relationship diagram you can drag, style and export — no account, no server round-trips, nothing leaves your browser.
+**A fast, local-first diagram workspace.** Write [DBML](https://dbml.dbdiagram.io) for an entity-relationship diagram, or a Mermaid-compatible sequence diagram, flowchart or mindmap — each file renders live as you type. No account, no server round-trips, nothing leaves your browser.
 
 ![xdiag screenshot](docs/demo.png)
 
@@ -14,7 +14,8 @@
 - **Hover focus** — hovering a field highlights its relation and animates flow from the referencing side; unrelated edges dim.
 - **Navigation** — zoom in/out, zoom-to-fit (`f`), reset to 100 % (`0`), minimap, and a drag-resizable, collapsible editor pane.
 - **Theming** — five palettes (Indigo Slate, Ocean, Forest, Rose, Amber) plus accent/background/relation colour overrides, grid and minimap toggles, flow animation speed and thickness. Everything is driven by `--xd-*` CSS variables and persisted in `localStorage`.
-- **Export** — DBML, PostgreSQL DDL, MySQL DDL, and JSON, with copy-to-clipboard and file download.
+- **Export** — ERD exports DBML, PostgreSQL DDL, MySQL DDL and JSON; the other kinds export their source plus an SVG snapshot. Copy-to-clipboard and file download throughout.
+- **Four diagram kinds in one project** — ERD, sequence, flowchart and mindmap files share a file list and a single `xdiag-project.json` export/import.
 
 ## Quick start
 
@@ -45,6 +46,23 @@ docker run --rm -p 8088:8080 xdiag
 ```
 
 The runtime image is nginx-alpine serving static assets as the unprivileged `nginx` user on port 8080, with a health check, `server_tokens off`, long-lived immutable caching for hashed assets, and a strict CSP (`default-src 'self'`).
+
+## Files and kinds
+
+The editor pane opens with a file list. **+** adds a file; double-click a name to rename;
+the trash icon (hidden until hovered, disabled for the last file) deletes. Everything is
+persisted under `localStorage['xdiag_project']`, and the toolbar's JSON buttons move a
+whole project in and out.
+
+| Kind | Source | Toolbar |
+|---|---|---|
+| ERD | DBML | Auto Arrange, Layout Direction, Fit |
+| Sequence | `sequenceDiagram` — participants, arrows, notes, `loop`/`alt`/`opt` blocks | Fit |
+| Flowchart | `flowchart LR\|TB\|RL\|BT` — nodes, chains, labelled and dashed edges | Fit |
+| Mindmap | `mindmap` — indentation tree with mermaid shape brackets | Fit |
+
+The sequence, flowchart and mindmap grammars are Mermaid-compatible subsets; the ERD kind
+uses DBML. Non-ERD renderers are lazy-loaded, so opening an ERD does not download them.
 
 ## DBML in, ERD out
 
@@ -87,9 +105,13 @@ ALTER TABLE "posts"
 ```
 src/
   engine/          dbmlParser.ts · layout.ts (dagre + nearest-side routing) · sqlExporter.ts
+  kinds/           registry (one entry per kind) · sequence/ · flowchart/ · mindmap/ parsers
+  project/         store.ts — document list, localStorage, project JSON
   components/
     canvas/        ERDCanvas · TableNode · GroupNode · RelationEdge · ZoomControls
-    editor/        EditorPanel (CodeMirror 6, DBML folds + highlight)
+    svg/           usePanZoom · ZoomPanel · exportSvg · sequence/ · flowchart/ · mindmap/
+    files/         FileList
+    editor/        EditorPanel (CodeMirror 6, per-kind highlight + folds)
     toolbar/       Toolbar
     settings/      SettingsModal
     export/        ExportModal
@@ -98,7 +120,7 @@ src/
 deploy/nginx.conf  unprivileged static server config
 ```
 
-The engine is pure TypeScript with no React dependency, which is why all 52 unit tests target it directly; UI behaviour is verified in a real browser.
+The engine and the kind parsers are pure TypeScript with no React dependency, which is why the unit tests target them directly; UI behaviour is verified in a real browser.
 
 ## Security
 
@@ -106,7 +128,7 @@ Dependencies and the built image are scanned with Trivy in CI (see [`SECURITY.md
 
 ## Contributing
 
-Issues and pull requests are welcome. Run `pnpm lint && pnpm test && pnpm build` before pushing; keep the engine free of React imports and add a test alongside any parser, layout or exporter change.
+Issues and pull requests are welcome. Run `pnpm lint && pnpm test && pnpm build` before pushing; keep the engine and `src/kinds/*/parse.ts` free of React imports and add a test alongside any parser, layout or exporter change.
 
 ## License
 
