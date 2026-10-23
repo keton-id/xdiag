@@ -50,13 +50,22 @@ export default function App() {
   const active = project.documents.find(d => d.id === project.activeId) ?? project.documents[0];
   const spec = KINDS[active.kind];
   // Keep the last document that parsed so a mid-edit typo shows the error bar
-  // over the previous good drawing instead of blanking the canvas.
-  const lastGood = useRef<KindDocument | null>(null);
-  const parsed = useMemo(() => {
-    const next = spec.parse(active.source, lastGood.current ?? undefined);
-    if (!next.error) lastGood.current = next;
-    return next;
-  }, [spec, active.source]);
+  // over the previous good drawing instead of blanking the canvas. React's
+  // "adjust state while rendering" pattern avoids a ref read during render
+  // and the extra commit an effect would cost.
+  const [lastGood, setLastGood] = useState<{
+    id: string;
+    source: string;
+    doc: KindDocument;
+  } | null>(null);
+  const cached = lastGood?.id === active.id ? lastGood : null;
+  const parsed = useMemo(
+    () => spec.parse(active.source, cached?.doc),
+    [spec, active.source, cached],
+  );
+  if (!parsed.error && cached?.source !== active.source) {
+    setLastGood({ id: active.id, source: active.source, doc: parsed });
+  }
 
   useEffect(() => {
     applySettings(settings);

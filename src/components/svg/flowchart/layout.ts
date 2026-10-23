@@ -39,6 +39,31 @@ export interface FlowLayout {
   edges: RoutedEdge[];
 }
 
+/** Orthogonal polyline with rounded corners at each interior vertex. */
+function roundedPath(raw: { x: number; y: number }[], radius: number): string {
+  // Zero-length legs would divide by zero when rounding.
+  const points = raw.filter(
+    (p, i) => i === 0 || Math.hypot(p.x - raw[i - 1].x, p.y - raw[i - 1].y) > 0.01,
+  );
+  if (points.length < 2) return '';
+  let d = `M${points[0].x},${points[0].y}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const prev = points[i - 1];
+    const cur = points[i];
+    const next = points[i + 1];
+    const inLen = Math.hypot(cur.x - prev.x, cur.y - prev.y);
+    const outLen = Math.hypot(next.x - cur.x, next.y - cur.y);
+    const r = Math.min(radius, inLen / 2, outLen / 2);
+    const beforeX = cur.x - ((cur.x - prev.x) / inLen) * r;
+    const beforeY = cur.y - ((cur.y - prev.y) / inLen) * r;
+    const afterX = cur.x + ((next.x - cur.x) / outLen) * r;
+    const afterY = cur.y + ((next.y - cur.y) / outLen) * r;
+    d += ` L${beforeX},${beforeY} Q${cur.x},${cur.y} ${afterX},${afterY}`;
+  }
+  const last = points[points.length - 1];
+  return `${d} L${last.x},${last.y}`;
+}
+
 function measure(node: FlowNode): { w: number; h: number } {
   const textW = node.label.length * CHAR_W;
   switch (node.shape) {
@@ -96,8 +121,9 @@ export function layoutFlowchart(model: FlowModel): FlowLayout {
   for (const item of items) buckets[item.rank].push(item);
 
   const placed = new Map<string, PlacedNode>();
-  const positions: PlacedNode[] = [];
-  const mainSizes = buckets.map(b => Math.max(...b.map(i => (vertical ? i.w : i.h))));
+  // Main axis is y when vertical, x otherwise; the rank advances by the
+  // extent on that axis.
+  const mainSizes = buckets.map(b => Math.max(...b.map(i => (vertical ? i.h : i.w))));
 
   const mainStarts: number[] = [];
   let cursor = MARGIN;
@@ -117,18 +143,114 @@ export function layoutFlowchart(model: FlowModel): FlowLayout {
     const rank = reversed ? rankCount - 1 - r : r;
     let along = crossStarts[r];
     for (const item of buckets[r]) {
-      const main = mainStarts[rank] + (mainSizes[rank] - (vertical ? item.w : item.h)) / 2;
+      const main = mainStarts[rank] + (mainSizes[rank] - (vertical ? item.h : item.w)) / 2;
       const cross = along;
       const placedNode: PlacedNode = vertical
         ? { ...item.node, x: cross, y: main, w: item.w, h: item.h }
         : { ...item.node, x: main, y: cross, w: item.w, h: item.h };
       placed.set(item.node.id, placedNode);
-      positions.push(placedNode);
       along += (vertical ? item.w : item.h) + SIBLING_GAP;
     }
   }
 
   const nodes = model.nodes.map(n => placed.get(n.id)).filter((n): n is PlacedNode => Boolean(n));
+  const limit = nodes.reduce((max, n) => Math.max(max, (vertical ? n.y + n.h : n.x + n.w)), 0) + MARGIN;
+
+  // Routes are computed in main/cross space, then mapped back to x/y. The
+  // reading direction is already baked into the positions, so "forward" is
+  // just a higher main coordinate than the source.
+  const toXY = (main: number, cross: number) => (vertical ? { x: cross, y: main } : { x: main, y: cross });
+  const span = (node: PlacedNode) => ({
+    main: vertical ? node.y : node.x,
+    cross: vertical ? node.x : node.y,
+    mainSize: vertical ? node.h : node.w,
+    crossSize: vertical ? node.w : node.h,
+  });
+  // Back edges run in a lane past the last node, so they never cross one.
+  const channel = MARGIN + laneMax + 24;
+
+  /**
+   * Back edges need a straight run at a fixed main coordinate from
+   * `fromCross` down to `channel`. Slide it off any node that would sit in
+   * that corridor, preferring the smallest move.
+   */
+  const freeMain = (preferred: number, fromCross: number, toCross: number): number => {
+    const lo = Math.min(fromCross, toCross);
+    const hi = Math.max(fromCross, toCross);
+    const blocked = (main: number) =>
+      nodes.some(n => {
+        const s = span(n);
+        return (
+          main >= s.main - 8 &&
+          main <= s.main + s.mainSize + 8 &&
+          // Inset the corridor so merely touching the face a leg leaves from
+          // does not count as an obstruction.
+          s.cross < hi - 4 &&
+          s.cross + s.crossSize > lo + 4
+        );
+      });
+    if (!blocked(preferred)) return preferred;
+    const candidates = nodes
+      .flatMap(n => {
+        const s = span(n);
+        return [s.main - 20, s.main + s.mainSize + 20];
+      })
+      .filter(m => m > 0 && m < limit)
+      .sort((p, q) => Math.abs(p - preferred) - Math.abs(q - preferred));
+    return candidates.find(m => !blocked(m)) ?? preferred;
+  };
+
+  type Pt = { x: number; y: number };
+
+  /** Would a straight run between two cross coordinates hit a node? */
+  const crossBlocked = (cross: number, fromMain: number, toMain: number, skip: PlacedNode[]) => {
+    const lo = Math.min(fromMain, toMain);
+    const hi = Math.max(fromMain, toMain);
+    return nodes.some(n => {
+      if (skip.includes(n)) return false;
+      const s = span(n);
+      return (
+        cross >= s.cross - 8 &&
+        cross <= s.cross + s.crossSize + 8 &&
+        s.main < hi - 4 &&
+        s.main + s.mainSize > lo + 4
+      );
+    });
+  };
+
+  /** Lowest-collision cross lane for a main span, preferring `preferred`. */
+  const freeCross = (fromMain: number, toMain: number, preferred: number): number => {
+    const candidates = [
+      preferred,
+      ...nodes.flatMap(n => {
+        const s = span(n);
+        return [s.cross - 14, s.cross + s.crossSize + 14];
+      }),
+    ]
+      .filter(c => c > 0)
+      .sort((p, q) => Math.abs(p - preferred) - Math.abs(q - preferred));
+    return candidates.find(c => !crossBlocked(c, fromMain, toMain, [])) ?? preferred;
+  };
+
+  /**
+   * A forward edge that skips a rank cuts across the skipped column. Sample
+   * the curve; when it lands inside another node, reroute it orthogonally
+   * through the free gap between ranks instead.
+   */
+  const cubicHitsNode = (p0: Pt, c1: Pt, c2: Pt, p3: Pt, skip: PlacedNode[]) => {
+    for (let i = 1; i < 24; i++) {
+      const t = i / 24;
+      const u = 1 - t;
+      const x = u * u * u * p0.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * p3.x;
+      const y = u * u * u * p0.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * p3.y;
+      const hit = nodes.some(n => {
+        if (skip.includes(n)) return false;
+        return x > n.x + 2 && x < n.x + n.w - 2 && y > n.y + 2 && y < n.y + n.h - 2;
+      });
+      if (hit) return true;
+    }
+    return false;
+  };
 
   const edges: RoutedEdge[] = [];
   for (const edge of model.edges) {
@@ -136,35 +258,94 @@ export function layoutFlowchart(model: FlowModel): FlowLayout {
     const b = placed.get(edge.to);
     if (!a || !b) continue;
 
-    const aCx = a.x + a.w / 2;
-    const aCy = a.y + a.h / 2;
-    const bCx = b.x + b.w / 2;
-    const bCy = b.y + b.h / 2;
-    const dx = bCx - aCx;
-    const dy = bCy - aCy;
-    const angle = Math.atan2(dy, dx);
+    const sa = span(a);
+    const sb = span(b);
+    const aMainMid = sa.main + sa.mainSize / 2;
+    const bMainMid = sb.main + sb.mainSize / 2;
+    const aCrossMid = sa.cross + sa.crossSize / 2;
+    const bCrossMid = sb.cross + sb.crossSize / 2;
 
-    // Clip the segment to both node boxes so arrowheads touch the border.
-    const startX = aCx + Math.cos(angle) * (a.w / 2) * 0.96;
-    const startY = aCy + Math.sin(angle) * (a.h / 2) * 0.96;
-    const endX = bCx - Math.cos(angle) * (b.w / 2) * 0.96;
-    const endY = bCy - Math.sin(angle) * (b.h / 2) * 0.96;
+    let d: string;
+    let labelX: number;
+    let labelY: number;
+    let endX: number;
+    let endY: number;
+    let endAngle: number;
 
-    const bend = Math.abs(dy) > Math.abs(dx)
-      ? `M${startX},${startY} C${startX},${(startY + endY) / 2} ${endX},${(startY + endY) / 2} ${endX},${endY}`
-      : `M${startX},${startY} C${(startX + endX) / 2},${startY} ${(startX + endX) / 2},${endY} ${endX},${endY}`;
+    if (bMainMid > aMainMid + 0.5) {
+      // Forward: leave the trailing face and arrive at the leading face, so
+      // arrowheads stop on the border instead of inside the box.
+      const startMain = sa.main + sa.mainSize;
+      const endMain = sb.main;
+      // Half the gap: a straight run that never overshoots into an S-bend.
+      const control = Math.max(0, (endMain - startMain) / 2);
+      const p0 = toXY(startMain, aCrossMid);
+      const c1 = toXY(startMain + control, aCrossMid);
+      const c2 = toXY(endMain - control, bCrossMid);
+      const p3 = toXY(endMain, bCrossMid);
+      if (cubicHitsNode(p0, c1, c2, p3, [a, b])) {
+        // Rank-skipping edge that would cut a corner: go around through a
+        // cross lane that is clear for the whole span.
+        const lane = freeCross(startMain, endMain, bCrossMid);
+        const points = [
+          p0,
+          toXY(startMain + 16, aCrossMid),
+          toXY(startMain + 16, lane),
+          toXY(endMain - 16, lane),
+          toXY(endMain - 16, bCrossMid),
+          p3,
+        ];
+        d = roundedPath(points, 12);
+        labelX = (points[3].x + points[2].x) / 2;
+        labelY = (points[3].y + points[2].y) / 2;
+        endX = p3.x;
+        endY = p3.y;
+        endAngle = Math.atan2(p3.y - points[4].y, p3.x - points[4].x);
+      } else {
+        // de Casteljau at t = 0.5: the label sits on the curve, not on the chord.
+        labelX = (p0.x + 3 * c1.x + 3 * c2.x + p3.x) / 8;
+        labelY = (p0.y + 3 * c1.y + 3 * c2.y + p3.y) / 8;
+        d = `M${p0.x},${p0.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${p3.x},${p3.y}`;
+        endX = p3.x;
+        endY = p3.y;
+        endAngle = Math.atan2(p3.y - c2.y, p3.x - c2.x);
+      }
+    } else {
+      // Backward or same-rank: drop into the channel, run along it, and come
+      // back up into the target's trailing face. Both legs are slid off any
+      // node standing in the way.
+      const down = freeMain(aMainMid, sa.cross + sa.crossSize, channel);
+      const up = freeMain(bMainMid, sb.cross + sb.crossSize, channel);
+      const points = [
+        toXY(aMainMid, sa.cross + sa.crossSize),
+        toXY(down, sa.cross + sa.crossSize),
+        toXY(down, channel),
+        toXY(up, channel),
+        toXY(up, sb.cross + sb.crossSize),
+        toXY(bMainMid, sb.cross + sb.crossSize),
+      ];
+      d = roundedPath(points, 14);
+      const [from, to] = [points[2], points[3]];
+      labelX = (from.x + to.x) / 2;
+      labelY = (from.y + to.y) / 2;
+      const last = points[5];
+      const prev = points[4];
+      endX = last.x;
+      endY = last.y;
+      endAngle = Math.atan2(last.y - prev.y, last.x - prev.x);
+    }
 
     edges.push({
-      d: bend,
+      d,
       label: edge.label,
-      labelX: (startX + endX) / 2,
-      labelY: (startY + endY) / 2,
+      labelX,
+      labelY,
       dashed: edge.dashed,
       thick: edge.thick,
       arrow: edge.arrow,
       x: endX,
       y: endY,
-      angle,
+      angle: endAngle,
     });
   }
 
