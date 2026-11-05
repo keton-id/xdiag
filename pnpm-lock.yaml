@@ -182,8 +182,8 @@ importers:
         specifier: ^6.43.15
         version: 6.43.15
       '@dbml/core':
-        specifier: ^10.3.1
-        version: 10.3.1
+        specifier: ^11.0.1
+        version: 11.0.1
       '@lezer/highlight':
         specifier: ^1.2.5
         version: 1.2.5
@@ -347,12 +347,12 @@ packages:
     resolution: {integrity: sha512-OoKoR0f76dCY666JlcbhmVTs2drYj1GUXZTYTcbUgJjh9Nv41aFfZ21bPQTERm5+L5cBDo466NltB2lplS5GBw==}
     engines: {node: '>=20.19.0'}
 
-  '@dbml/core@10.3.1':
-    resolution: {integrity: sha512-swCpThxQchab6d6wP5gp/UFcArmptyIRFaAEUW8Z8oNrTYluVlh0Ru6AsB44JiA4+lVgNk0yeF1ewuOuFT3ZPA==}
+  '@dbml/core@11.0.1':
+    resolution: {integrity: sha512-+dCuTh6OPEPIg4Wr+Ti0hbT27XQA81wzFC5q9nu+WpjEFeiVu9VBh+rRV+maTlo2jqya/lWcfUJv712nBxK04g==}
     engines: {node: '>=16'}
 
-  '@dbml/parse@10.3.1':
-    resolution: {integrity: sha512-l2T+RYUpkCxqSlqMnc3YOwJyLDnDDckddG26KO4vwtYGJKIPYautzBi+ypKxEMdLvuNpHN/HkRCteApeZei8TA==}
+  '@dbml/parse@11.0.1':
+    resolution: {integrity: sha512-29ppWAC3jWnwegm2ZfLLmfDcnpsVHpPa4EnKOJ118O/sEc+GlOuyl0cDXSTKKAuhF2dQYgADzutZ8jZdlXe0Uw==}
     engines: {node: '>=18'}
 
   '@exodus/bytes@1.16.0':
@@ -1530,9 +1530,9 @@ snapshots:
 
   '@csstools/css-tokenizer@4.0.2': {}
 
-  '@dbml/core@10.3.1':
+  '@dbml/core@11.0.1':
     dependencies:
-      '@dbml/parse': 10.3.1
+      '@dbml/parse': 11.0.1
       antlr4: 4.13.2
       lodash: 4.18.1
       lodash-es: 4.18.1
@@ -1540,7 +1540,7 @@ snapshots:
       parsimmon: 1.18.1
       pluralize: 8.0.0
 
-  '@dbml/parse@10.3.1':
+  '@dbml/parse@11.0.1':
     dependencies:
       lodash-es: 4.18.1
       luxon: 3.7.2
